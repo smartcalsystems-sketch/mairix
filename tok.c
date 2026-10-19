@@ -26,12 +26,137 @@
 #include <ctype.h>
 #include "mairix.h"
 
-static unsigned char ascii_tolower(unsigned char c)/*{{{*/
+static unsigned int utf8_next_codepoint(const unsigned char **p)
 {
-  if ((c >= 'A') && (c <= 'Z')) return c + ('a' - 'A');
+  unsigned char c = **p;
+  if (c == 0) return 0;
+  if (c < 0x80) {
+    (*p)++;
+    return c;
+  } else if ((c & 0xe0) == 0xc0) {
+    unsigned char c2 = (*p)[1];
+    if ((c2 & 0xc0) == 0x80) {
+      *p += 2;
+      return ((c & 0x1f) << 6) | (c2 & 0x3f);
+    }
+  } else if ((c & 0xf0) == 0xe0) {
+    unsigned char c2 = (*p)[1];
+    unsigned char c3 = (*p)[2];
+    if ((c2 & 0xc0) == 0x80 && (c3 & 0xc0) == 0x80) {
+      *p += 3;
+      return ((c & 0x0f) << 12) | ((c2 & 0x3f) << 6) | (c3 & 0x3f);
+    }
+  } else if ((c & 0xf8) == 0xf0) {
+    unsigned char c2 = (*p)[1];
+    unsigned char c3 = (*p)[2];
+    unsigned char c4 = (*p)[3];
+    if ((c2 & 0xc0) == 0x80 && (c3 & 0xc0) == 0x80 && (c4 & 0xc0) == 0x80) {
+      *p += 4;
+      return ((c & 0x07) << 18) | ((c2 & 0x3f) << 12) | ((c3 & 0x3f) << 6) | (c4 & 0x3f);
+    }
+  }
+  (*p)++;
   return c;
 }
-/*}}}*/
+
+unsigned int unicode_casefold_codepoint(unsigned int cp)
+{
+  /* ASCII */
+  if (cp >= 'A' && cp <= 'Z') return cp + ('a' - 'A');
+
+  /* Latin-1 Supplement */
+  if (cp >= 0x00C0 && cp <= 0x00D6) return cp + 0x0020;
+  if (cp >= 0x00D8 && cp <= 0x00DE) return cp + 0x0020;
+
+  /* Latin Extended-A */
+  if (cp >= 0x0100 && cp <= 0x012F) {
+    if ((cp % 2) == 0) return cp + 1;
+    return cp;
+  }
+  if (cp >= 0x0132 && cp <= 0x0137) {
+    if ((cp % 2) == 0) return cp + 1;
+    return cp;
+  }
+  if (cp >= 0x0139 && cp <= 0x0148) {
+    if ((cp % 2) == 1) return cp + 1;
+    return cp;
+  }
+  if (cp >= 0x014A && cp <= 0x0177) {
+    if ((cp % 2) == 0) return cp + 1;
+    return cp;
+  }
+  if (cp == 0x0178) return 0x00FF; /* Ÿ -> ÿ */
+  if (cp >= 0x0179 && cp <= 0x017E) {
+    if ((cp % 2) == 1) return cp + 1;
+    return cp;
+  }
+
+  /* Greek and Coptic */
+  if (cp == 0x0386) return 0x03AC; /* Ά -> ά */
+  if (cp == 0x0388) return 0x03AD; /* Έ -> έ */
+  if (cp == 0x0389) return 0x03AE; /* Ή -> ή */
+  if (cp == 0x038A) return 0x03AF; /* Ί -> ί */
+  if (cp == 0x038C) return 0x03CC; /* Ό -> ό */
+  if (cp == 0x038E) return 0x03CD; /* Ύ -> ύ */
+  if (cp == 0x038F) return 0x03CE; /* Ώ -> ώ */
+  if (cp >= 0x0391 && cp <= 0x03A1) return cp + 0x0020; /* Α-Ρ -> α-ρ */
+  if (cp >= 0x03A3 && cp <= 0x03AB) return cp + 0x0020; /* Σ-Ϋ -> σ-ϋ */
+
+  /* Cyrillic */
+  if (cp >= 0x0400 && cp <= 0x040F) return cp + 0x0050; /* Ѐ-Џ -> ѐ-џ */
+  if (cp >= 0x0410 && cp <= 0x042F) return cp + 0x0020; /* А-Я -> а-я */
+  if (cp >= 0x0460 && cp <= 0x0481) {
+    if ((cp % 2) == 0) return cp + 1;
+    return cp;
+  }
+  if (cp >= 0x048A && cp <= 0x04BF) {
+    if ((cp % 2) == 0) return cp + 1;
+    return cp;
+  }
+  if (cp >= 0x04D0 && cp <= 0x04FF) {
+    if ((cp % 2) == 0) return cp + 1;
+    return cp;
+  }
+
+  return cp;
+}
+
+static int utf8_encode_codepoint(unsigned int cp, unsigned char *out)
+{
+  if (cp < 0x80) {
+    out[0] = (unsigned char) cp;
+    return 1;
+  } else if (cp < 0x800) {
+    out[0] = (unsigned char) (0xc0 | (cp >> 6));
+    out[1] = (unsigned char) (0x80 | (cp & 0x3f));
+    return 2;
+  } else if (cp < 0x10000) {
+    out[0] = (unsigned char) (0xe0 | (cp >> 12));
+    out[1] = (unsigned char) (0x80 | ((cp >> 6) & 0x3f));
+    out[2] = (unsigned char) (0x80 | (cp & 0x3f));
+    return 3;
+  } else {
+    out[0] = (unsigned char) (0xf0 | (cp >> 18));
+    out[1] = (unsigned char) (0x80 | ((cp >> 12) & 0x3f));
+    out[2] = (unsigned char) (0x80 | ((cp >> 6) & 0x3f));
+    out[3] = (unsigned char) (0x80 | (cp & 0x3f));
+    return 4;
+  }
+}
+
+void utf8_casefold_inplace(char *str)
+{
+  if (!str) return;
+  const unsigned char *src = (const unsigned char *) str;
+  unsigned char *dst = (unsigned char *) str;
+
+  while (*src) {
+    unsigned int cp = utf8_next_codepoint(&src);
+    unsigned int folded = unicode_casefold_codepoint(cp);
+    dst += utf8_encode_codepoint(folded, dst);
+  }
+  *dst = '\0';
+}
 
 static void init_matches(struct matches *m) {/*{{{*/
   m->msginfo = NULL;
@@ -258,9 +383,8 @@ void add_token_in_file(int file_index, unsigned int hash_key, char *tok_text, st
   char *p;
 
   lc_tok_text = new_string((char*)tok_text);
-  for (p = lc_tok_text; *p; p++) {
-    *p = ascii_tolower(*(unsigned char *) p);
-  }
+  utf8_casefold_inplace(lc_tok_text);
+  p = lc_tok_text + strlen(lc_tok_text);
   /* 2nd arg is string length */
   hash = hashfn((unsigned char *) lc_tok_text, p - lc_tok_text, hash_key);
 
@@ -304,9 +428,8 @@ void add_token2_in_file(int file_index, unsigned int hash_key, char *tok_text, s
   char *p;
 
   lc_tok_text = new_string(tok_text);
-  for (p = lc_tok_text; *p; p++) {
-    *p = ascii_tolower(*(unsigned char *) p);
-  }
+  utf8_casefold_inplace(lc_tok_text);
+  p = lc_tok_text + strlen(lc_tok_text);
   /* 2nd arg is string length */
   hash = hashfn((unsigned char *) lc_tok_text, p - lc_tok_text, hash_key);
 

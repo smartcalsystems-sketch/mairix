@@ -361,6 +361,8 @@ void add_token_in_file(int file_index, unsigned int hash_key, char *tok_text, st
 void check_and_enlarge_encoding(struct matches *m);
 void insert_index_on_encoding(struct matches *m, int idx);
 void add_token2_in_file(int file_index, unsigned int hash_key, char *tok_text, struct toktable2 *table, int add_to_chain1);
+void utf8_casefold_inplace(char *str);
+unsigned int unicode_casefold_codepoint(unsigned int cp);
 
 /* In db.c */
 #define CREATE_RANDOM_DATABASE_HASH 0
